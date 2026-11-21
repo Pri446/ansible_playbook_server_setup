@@ -7,7 +7,7 @@
   vars_prompt:
     - name: npm_dir
       prompt: "Nginx Proxy Manager install directory"
-      default: /home/innovative/nginx-proxy-manager
+      default: /home/imis_user/nginx-proxy-manager
       private: false
 
     - name: npm_ssh_port
@@ -17,7 +17,7 @@
 
     - name: npm_admin_user
       prompt: "SSH username shown in tunnel instructions"
-      default: innovative
+      default: imis_user
       private: false
 
     - name: npm_remove_existing_input

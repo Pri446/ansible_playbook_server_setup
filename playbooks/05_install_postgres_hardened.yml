@@ -17,13 +17,13 @@
 
   vars_prompt:
     - name: pg_version
-      prompt: "PostgreSQL major version (14, 15, or 16)"
+      prompt: "PostgreSQL major version "
       default: "14"
       private: false
 
     - name: pg_dir
       prompt: "Install directory"
-      default: "/home/innovative/postgres14"
+      default: "/home/imis_user/postgres14"
       private: false
 
     - name: pg_default_database
@@ -33,7 +33,7 @@
 
     - name: pg_admin_user
       prompt: "DB admin user"
-      default: innovative
+      default: imis_user
       private: false
 
     - name: pg_admin_password
@@ -143,7 +143,7 @@
           - pg_version in ['14', '15', '16']
           - pg_dir.startswith('/')
           - "'postgres' in pg_dir"
-          - pg_dir not in ['/', '/home', '/opt', '/var', '/usr', '/root', '/home/innovative']
+          - pg_dir not in ['/', '/home', '/opt', '/var', '/usr', '/root', '/home/imis_user']
           - pg_default_database is match('^[A-Za-z_][A-Za-z0-9_]*$')
           - pg_admin_user is match('^[A-Za-z_][A-Za-z0-9_]*$')
           - pg_admin_user != 'postgres'
@@ -784,4 +784,4 @@
           - "Public remote allowlist={{ pg_public_allowed_list | join(', ') if pg_public_allowed_list | length > 0 else 'none' }}"
           - "Private remote allowlist={{ pg_private_allowed_list | join(', ') if pg_private_allowed_list | length > 0 else 'none' }}"
           - "If pg_bind_ip is 127.0.0.1, the published host port is local-only."
-          - "Tunnel: ssh -p {{ npm_ssh_port | default('2224') }} -N -L 15432:127.0.0.1:15432 {{ npm_admin_user | default(ansible_user | default('innovative')) }}@{{ ansible_host }}"
+          - "Tunnel: ssh -p {{ npm_ssh_port | default('2224') }} -N -L 15432:127.0.0.1:15432 {{ npm_admin_user | default(ansible_user | default('imis_user')) }}@{{ ansible_host }}"

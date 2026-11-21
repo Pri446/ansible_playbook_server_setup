@@ -5,7 +5,7 @@
   gather_facts: false
 
   vars:
-    shared_base_path: "/home/innovative"
+    shared_base_path: "/home/imis_user"
     shared_nginx_dir: "{{ shared_base_path }}/shared-nginx"
     shared_nginx_container: "shared-nginx"
     shared_nginx_image: "nginx:alpine"

@@ -1,5 +1,5 @@
 ---
-- name: Linux server and SSH hardening - root to innovative using same SSH key
+- name: Linux server and SSH hardening
   hosts: hardening_target
   become: true
   gather_facts: false
@@ -69,7 +69,7 @@
       ansible.builtin.pause:
         prompt: >-
           Enter the NEW non-root administrative Linux username to create or use
-          (example: innovative; do not enter root)
+          (example: new administrative user created; do not enter root)
       register: prompt_admin_user
       when: vault_hardening_admin_user is not defined
       delegate_to: localhost
@@ -1519,8 +1519,8 @@
                if hardening_local_connection
                else 'inventory.ini was updated to the final administrative user, port, and same key.' }}
           - "The custom firewall protects host INPUT without flushing Docker FORWARD chains."
-          - "IPv4 host firewall rules are configured; review IPv6 separately if public IPv6 is enabled."
-          - "Keep provider-console access available until a reboot/reconnection test succeeds."
+          - "firewall rules are configured
+
 
   handlers:
     - name: Restart SSH

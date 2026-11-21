@@ -9,7 +9,7 @@
   vars_prompt:
     - name: gs_dir
       prompt: "GeoServer install directory"
-      default: /home/innovative/geoserver
+      default: /home/imis_user/geoserver
       private: false
 
     - name: gs_printing_setup_input
@@ -19,12 +19,12 @@
 
     - name: gs_printing_a4_template_src
       prompt: "Full path to the A4 printing background template PDF"
-      default: /home/innovative/ansible_playbook_server_setup/files/geoserver_workspace/pdf/A4_Landscape.pdf
+      default: /home/imis_user/ansible_playbook_server_setup/files/geoserver_workspace/pdf/A4_Landscape.pdf
       private: false
 
     - name: gs_printing_a3_template_src
       prompt: "Full path to the A3 printing background template PDF"
-      default: /home/innovative/ansible_playbook_server_setup/files/geoserver_workspace/pdf/A3_Landscape.pdf
+      default: /home/imis_user/ansible_playbook_server_setup/files/geoserver_workspace/pdf/A3_Landscape.pdf
       private: false
 
     - name: gs_version
@@ -264,7 +264,7 @@
           # Accept the default path or any custom absolute installation path.
           # The exclusions below still prevent deployment over a system root.
           - gs_dir | trim | length > 0
-          - gs_dir not in ['/', '/home', '/opt', '/var', '/usr', '/root', '/home/innovative']
+          - gs_dir not in ['/', '/home', '/opt', '/var', '/usr', '/root', '/home/imis_user']
           - gs_version is match('^[0-9]+\\.[0-9]+\\.[0-9]+$')
           - gs_container_name is match('^[A-Za-z_][A-Za-z0-9_.-]*$')
           - gs_host_port | int >= 1
@@ -447,7 +447,7 @@
               port: 80
 
           layouts:
-            A4 Portrait:
+            A4 Landscape:
               metaData:
                 title: '${mapTitle}'
                 author: 'IMIS'
@@ -473,7 +473,7 @@
                     align: right
                     text: '1:${scale} ${now MM.dd.yyyy}'
 
-            A3 Portrait:
+            A3 Landscape:
               metaData:
                 title: '${mapTitle}'
                 author: 'IMIS'
@@ -1233,6 +1233,60 @@
           role service, and GeoServer REST API access.
       when: gs_security_setup
 
+    - name: Read the existing GeoServer service-user AuthKey when present
+      ansible.builtin.slurp:
+        src: "{{ gs_dir }}/geoserver_data/security/usergroup/default/users.xml"
+      register: gs_existing_users_xml
+      no_log: true
+      when: gs_security_setup
+
+    - name: Extract the existing GeoServer service-user AuthKey
+      ansible.builtin.set_fact:
+        gs_existing_authkey_value: >-
+          {{
+            (
+              gs_existing_users_xml.content | b64decode
+              | regex_findall(
+                  '(?s)<user[^>]*(?:name|userName)="' ~ gs_service_user ~ '"[^>]*>.*?<property[^>]*name="UUID"[^>]*>([0-9a-fA-F-]{36})</property>'
+                )
+              | first
+              | default('')
+            )
+          }}
+      no_log: true
+      when: gs_security_setup
+
+    - name: Generate a GeoServer service-user AuthKey when none exists
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - import uuid; print(uuid.uuid4())
+      register: gs_generated_authkey
+      changed_when: false
+      no_log: true
+      when:
+        - gs_security_setup
+        - gs_existing_authkey_value | default('') | trim | length == 0
+
+    - name: Select the stable GeoServer service-user AuthKey
+      ansible.builtin.set_fact:
+        gs_service_authkey_value: >-
+          {{
+            gs_existing_authkey_value | default('') | trim
+            if gs_existing_authkey_value | default('') | trim | length > 0
+            else gs_generated_authkey.stdout | trim
+          }}
+      no_log: true
+      when: gs_security_setup
+
+    - name: Require a valid GeoServer service-user AuthKey before user creation
+      ansible.builtin.assert:
+        that:
+          - gs_service_authkey_value is match('^[0-9a-fA-F-]{36}$')
+        fail_msg: "Could not create a valid UUID for the GeoServer service user."
+      when: gs_security_setup
+
     - name: Create or update GeoServer service user
       ansible.builtin.uri:
         url: "http://127.0.0.1:{{ gs_host_port }}/geoserver/rest/security/usergroup/users"
@@ -1249,11 +1303,71 @@
             <userName>{{ gs_service_user }}</userName>
             <password>{{ gs_service_password_input }}</password>
             <enabled>true</enabled>
+            <property name="UUID">{{ gs_service_authkey_value }}</property>
           </user>
         status_code: [200, 201, 409]
         return_content: true
       register: gs_service_user_result
       failed_when: false
+      no_log: true
+      when: gs_security_setup
+
+    - name: Update existing GeoServer service user with its stable AuthKey
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ gs_host_port }}/geoserver/rest/usergroup/user/{{ gs_service_user }}"
+        method: POST
+        user: "{{ gs_admin_user }}"
+        password: "{{ gs_admin_password }}"
+        force_basic_auth: true
+        body_format: raw
+        headers:
+          Content-Type: application/xml
+          Accept: application/xml
+        body: |
+          <user>
+            <userName>{{ gs_service_user }}</userName>
+            <password>{{ gs_service_password_input }}</password>
+            <enabled>true</enabled>
+            <property name="UUID">{{ gs_service_authkey_value }}</property>
+          </user>
+        status_code: [200]
+        return_content: false
+      no_log: true
+      when:
+        - gs_security_setup
+        - gs_service_user_result.status | default(0) | int == 409
+
+    - name: Add the stable AuthKey property to the GeoServer user registry
+      ansible.builtin.replace:
+        path: "{{ gs_dir }}/geoserver_data/security/usergroup/default/users.xml"
+        regexp: '(?s)(<user[^>]*name="{{ gs_service_user }}"[^>]*>.*?<property[^>]*name="UUID"[^>]*>)[^<]*(</property>)'
+        replace: '\g<1>{{ gs_service_authkey_value }}\g<2>'
+        backup: true
+      when:
+        - gs_security_setup
+        - gs_existing_authkey_value | default('') | trim | length > 0
+      no_log: true
+
+    - name: Insert the stable AuthKey property when it is missing
+      ansible.builtin.replace:
+        path: "{{ gs_dir }}/geoserver_data/security/usergroup/default/users.xml"
+        regexp: '(?s)(<user[^>]*name="{{ gs_service_user }}"[^>]*>.*?)(</user>)'
+        replace: '\g<1>\n        <property name="UUID">{{ gs_service_authkey_value }}</property>\n    \g<2>'
+        backup: true
+      when:
+        - gs_security_setup
+        - gs_existing_authkey_value | default('') | trim | length == 0
+      no_log: true
+
+    - name: Reload GeoServer after persisting the service-user AuthKey
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ gs_host_port }}/geoserver/rest/reload"
+        method: POST
+        user: "{{ gs_admin_user }}"
+        password: "{{ gs_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 201]
+        return_content: false
       no_log: true
       when: gs_security_setup
 
@@ -1342,8 +1456,8 @@
     - name: Configure WFS as read-only Basic service
       ansible.builtin.replace:
         path: "{{ gs_dir }}/geoserver_data/wfs.xml"
-        regexp: '<serviceLevel>[^<]+</serviceLevel>'
-        replace: '<serviceLevel>BASIC</serviceLevel>'
+        regexp: "<serviceLevel>[^<]+</serviceLevel>"
+        replace: "<serviceLevel>BASIC</serviceLevel>"
         backup: true
       when:
         - gs_security_setup
@@ -1351,16 +1465,16 @@
     - name: Ensure WMS is enabled
       ansible.builtin.replace:
         path: "{{ gs_dir }}/geoserver_data/wms.xml"
-        regexp: '<enabled>[^<]+</enabled>'
-        replace: '<enabled>true</enabled>'
+        regexp: "<enabled>[^<]+</enabled>"
+        replace: "<enabled>true</enabled>"
         backup: true
       when: gs_security_setup
 
     - name: Ensure WFS is enabled
       ansible.builtin.replace:
         path: "{{ gs_dir }}/geoserver_data/wfs.xml"
-        regexp: '<enabled>[^<]+</enabled>'
-        replace: '<enabled>true</enabled>'
+        regexp: "<enabled>[^<]+</enabled>"
+        replace: "<enabled>true</enabled>"
         backup: true
       when: gs_security_setup
 
@@ -1375,6 +1489,29 @@
         block: |
           wms.*={{ gs_service_role }}
           wfs.*={{ gs_service_role }}
+      when: gs_security_setup
+
+    - name: Check whether the GeoServer AuthKey filter already exists
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ gs_host_port }}/geoserver/rest/security/authfilters/authkey"
+        method: GET
+        user: "{{ gs_admin_user }}"
+        password: "{{ gs_admin_password }}"
+        force_basic_auth: true
+        headers:
+          Accept: application/json
+        status_code: [200, 404]
+        return_content: false
+      register: gs_authkey_filter_check
+      no_log: true
+      when: gs_security_setup
+
+    - name: Display AuthKey filter existence status
+      ansible.builtin.debug:
+        msg: >-
+          GeoServer AuthKey filter existence check returned HTTP
+          {{ gs_authkey_filter_check.status | default('unknown') }}.
+          The filter will be created only when this status is 404.
       when: gs_security_setup
 
     - name: Create the GeoServer AuthKey filter if absent
@@ -1397,7 +1534,9 @@
         status_code: [200, 201, 409]
         return_content: false
       no_log: true
-      when: gs_security_setup
+      when:
+        - gs_security_setup
+        - gs_authkey_filter_check.status | default(0) | int == 404
 
     - name: Update the GeoServer AuthKey filter
       ansible.builtin.uri:
@@ -1421,9 +1560,32 @@
       no_log: true
       when: gs_security_setup
 
-    - name: Create or update the protected OGC filter chain
+    - name: Check whether the protected OGC filter chain already exists
       ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ gs_host_port }}/geoserver/rest/security/filterchain"
+        url: "http://127.0.0.1:{{ gs_host_port }}/geoserver/rest/security/filterChains/ogc"
+        method: GET
+        user: "{{ gs_admin_user }}"
+        password: "{{ gs_admin_password }}"
+        force_basic_auth: true
+        headers:
+          Accept: application/xml
+        status_code: [200, 404]
+        return_content: false
+      register: gs_ogc_chain_check
+      no_log: true
+      when: gs_security_setup
+
+    - name: Display OGC filter-chain existence status
+      ansible.builtin.debug:
+        msg: >-
+          GeoServer OGC filter-chain existence check returned HTTP
+          {{ gs_ogc_chain_check.status | default('unknown') }}.
+          The filter chain will be created only when this status is 404.
+      when: gs_security_setup
+
+    - name: Create the protected OGC filter chain if absent
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ gs_host_port }}/geoserver/rest/security/filterChains"
         method: POST
         user: "{{ gs_admin_user }}"
         password: "{{ gs_admin_password }}"
@@ -1433,25 +1595,34 @@
           Content-Type: application/xml
           Accept: application/xml
         body: |
-          <filterchain>
-            <filters name="ogc"
-                     class="org.geoserver.security.ServiceLoginFilterChain"
-                     path="/ows,/ows/**,/wms,/wms/**,/wfs,/wfs/**"
-                     disabled="false"
-                     allowSessionCreation="false"
-                     ssl="false"
-                     matchHTTPMethod="false"
-                     interceptorName="interceptor"
-                     exceptionTranslationName="exception">
-              <filter>authkey</filter>
+          <filterChain>
+            <name>ogc</name>
+            <className>org.geoserver.security.ServiceLoginFilterChain</className>
+            <patterns>
+              <string>/ows</string>
+              <string>/ows/**</string>
+              <string>/wms</string>
+              <string>/wms/**</string>
+              <string>/wfs</string>
+              <string>/wfs/**</string>
+            </patterns>
+            <filters>
+              <string>authkey</string>
             </filters>
-          </filterchain>
+            <disabled>false</disabled>
+            <allowSessionCreation>false</allowSessionCreation>
+            <requireSSL>false</requireSSL>
+            <matchHTTPMethod>false</matchHTTPMethod>
+            <position>0</position>
+          </filterChain>
         status_code: [200, 201, 409]
         return_content: false
       register: gs_ogc_chain_create_result
       failed_when: false
       no_log: true
-      when: gs_security_setup
+      when:
+        - gs_security_setup
+        - gs_ogc_chain_check.status | default(0) | int == 404
 
     - name: Require protected OGC filter chain request to succeed
       ansible.builtin.assert:
@@ -1461,11 +1632,13 @@
           GeoServer OGC filter-chain creation returned HTTP
           {{ gs_ogc_chain_create_result.status | default('unknown') }}.
           Verify the administrator credentials and AuthKey extension.
-      when: gs_security_setup
+      when:
+        - gs_security_setup
+        - gs_ogc_chain_check.status | default(0) | int == 404
 
     - name: Configure the protected OGC filter chain above default
       ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ gs_host_port }}/geoserver/rest/security/filterchain/ogc"
+        url: "http://127.0.0.1:{{ gs_host_port }}/geoserver/rest/security/filterChains/ogc"
         method: PUT
         user: "{{ gs_admin_user }}"
         password: "{{ gs_admin_password }}"
@@ -1475,17 +1648,26 @@
           Content-Type: application/xml
           Accept: application/xml
         body: |
-          <filters name="ogc"
-                   class="org.geoserver.security.ServiceLoginFilterChain"
-                   path="/ows,/ows/**,/wms,/wms/**,/wfs,/wfs/**"
-                   disabled="false"
-                   allowSessionCreation="false"
-                   ssl="false"
-                   matchHTTPMethod="false"
-                   interceptorName="interceptor"
-                   exceptionTranslationName="exception">
-            <filter>authkey</filter>
-          </filters>
+          <filterChain>
+            <name>ogc</name>
+            <className>org.geoserver.security.ServiceLoginFilterChain</className>
+            <patterns>
+              <string>/ows</string>
+              <string>/ows/**</string>
+              <string>/wms</string>
+              <string>/wms/**</string>
+              <string>/wfs</string>
+              <string>/wfs/**</string>
+            </patterns>
+            <filters>
+              <string>authkey</string>
+            </filters>
+            <disabled>false</disabled>
+            <allowSessionCreation>false</allowSessionCreation>
+            <requireSSL>false</requireSSL>
+            <matchHTTPMethod>false</matchHTTPMethod>
+            <position>0</position>
+          </filterChain>
         status_code: [200]
         return_content: false
       no_log: true
@@ -1532,7 +1714,7 @@
         timeout: 30
       when: gs_security_setup
 
-    - name: Wait for AuthKey auto-synchronization to generate the service-user UUID
+    - name: Wait for the persisted service-user UUID
       ansible.builtin.wait_for:
         path: "{{ gs_dir }}/geoserver_data/security/usergroup/default/users.xml"
         search_regex: '(?s)<user[^>]*name="{{ gs_service_user }}"[^>]*>.*?<property[^>]*name="UUID"[^>]*>[0-9a-fA-F-]{36}</property>'
@@ -1587,7 +1769,7 @@
             authKeyParamName: "{{ gs_authkey_parameter }}"
             authKeyMapperName: userPropertyMapper
             userGroupServiceName: default
-            allowMapperKeysAutoSync: true
+            allowMapperKeysAutoSync: false
             allowChallengeAnonymousSessions: false
         status_code: [200, 201]
         return_content: false

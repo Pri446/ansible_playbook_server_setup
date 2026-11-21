@@ -543,12 +543,10 @@
         msg:
           - "Docker: {{ docker_version_result.stdout }}"
           - "Compose: {{ docker_compose_version_result.stdout }}"
-          - "Docker service state: {{ docker_active_result.stdout }}"
-          - "Docker enabled state: {{ docker_enabled_result.stdout }}"
+          - "Docker is running and {{ docker_enabled_result.stdout }}"
           - "Audit rules requested: {{ docker_configure_auditd }}"
-          - >-
-            Log rotation: {{ docker_log_max_size }} x
-            {{ docker_log_max_file }} files
+          - >- 
+            Audit rules are enabled, and log rotation is set to {{ docker_log_max_size }} MB with {{ docker_log_max_file }}  files
           - >-
             Users may need to log out and back in if Docker group membership
             is managed separately.
